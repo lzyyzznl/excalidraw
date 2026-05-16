@@ -42,11 +42,30 @@ contextBridge.exposeInMainWorld("electronAPI", {
     };
   },
   getRecentProjects: (): Promise<
-    Array<{ directory: string; lastFile: string | null; lastOpened: number }>
+    Array<{ type: string; path: string; displayName: string; lastOpened: number }>
   > => ipcRenderer.invoke("get-recent-projects"),
   addRecentProject: (project: {
-    directory: string;
-    lastFile: string | null;
+    type: string;
+    path: string;
+    displayName: string;
     lastOpened: number;
   }): Promise<void> => ipcRenderer.invoke("add-recent-project", project),
+  selectFile: (): Promise<string | null> =>
+    ipcRenderer.invoke("select-file"),
+  renameFile: (
+    oldPath: string,
+    newName: string,
+  ): Promise<{ newPath?: string; error?: string }> =>
+    ipcRenderer.invoke("rename-file", oldPath, newName),
+  deleteFile: (
+    filePath: string,
+  ): Promise<{ success?: boolean; error?: string }> =>
+    ipcRenderer.invoke("delete-file", filePath),
+  onMenuAction: (callback: (action: string) => void): (() => void) => {
+    const handler = (_event: any, action: string) => callback(action);
+    ipcRenderer.on("menu-action", handler);
+    return () => {
+      ipcRenderer.removeListener("menu-action", handler);
+    };
+  },
 });
