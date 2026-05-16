@@ -3,12 +3,13 @@ import { join, resolve } from "path";
 import * as fs from "fs";
 
 function isPathSafe(targetPath: string): boolean {
-  try {
-    resolve(targetPath);
-    return !targetPath.includes("\0");
-  } catch {
-    return false;
-  }
+  // Reject null bytes (path traversal attacks)
+  if (targetPath.includes("\0")) return false;
+  // Resolve and verify no traversal patterns
+  const resolved = resolve(targetPath);
+  // If the raw input contains ".." it's a traversal attempt
+  if (targetPath.includes("..")) return false;
+  return true;
 }
 
 let mainWindow: BrowserWindow | null = null;
