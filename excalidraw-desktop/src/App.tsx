@@ -7,9 +7,10 @@ interface ProjectFile {
   modifiedAt: number;
 }
 
-interface RecentProject {
-  directory: string;
-  lastFile: string | null;
+interface RecentEntry {
+  type: "folder" | "file";
+  path: string;
+  displayName: string;
   lastOpened: number;
 }
 
@@ -32,7 +33,7 @@ export default function App() {
   const [directory, setDirectory] = useState<string | null>(null);
   const [files, setFiles] = useState<ProjectFile[]>([]);
   const [activeFile, setActiveFile] = useState<string | null>(null);
-  const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
+  const [recentProjects, setRecentProjects] = useState<RecentEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(260);
   const unwatchRef = useRef<(() => void) | null>(null);
@@ -81,25 +82,31 @@ export default function App() {
     unwatchRef.current = unwatch;
 
     // Add to recent
-    const recent: RecentProject = {
-      directory: dir,
-      lastFile: null,
+    const folderName = dir.split("/").pop() || dir;
+    const entry: RecentEntry = {
+      type: "folder",
+      path: dir,
+      displayName: folderName,
       lastOpened: Date.now(),
     };
-    window.electronAPI!.addRecentProject(recent);
+    window.electronAPI!.addRecentProject(entry);
 
-    // Update recent projects list
     setRecentProjects((prev) => {
-      const filtered = prev.filter((p) => p.directory !== dir);
-      return [recent, ...filtered].slice(0, 20);
+      const filtered = prev.filter((p) => p.path !== dir);
+      return [entry, ...filtered].slice(0, 20);
     });
   }, []);
 
-  // Open recent project
-  const openRecent = useCallback(async (recent: RecentProject) => {
+  // Open file
+  const openFile = useCallback(async () => {
     if (!isDesktop) return;
-    setDirectory(recent.directory);
-    setActiveFile(recent.lastFile || null);
+    const filePath = await window.electronAPI!.selectFile();
+    if (!filePath) return;
+
+    const dir = filePath.split("/").slice(0, -1).join("/");
+
+    setDirectory(dir);
+    setActiveFile(filePath);
     setError(null);
 
     if (unwatchRef.current) {
@@ -107,7 +114,70 @@ export default function App() {
       unwatchRef.current = null;
     }
 
-    const result = await window.electronAPI!.listFiles(recent.directory);
+    const result = await window.electronAPI!.listFiles(dir);
+    if ("error" in result) {
+      setError(result.error);
+      setFiles([]);
+      return;
+    }
+    setFiles(result as ProjectFile[]);
+
+    const unwatch = window.electronAPI!.watchDirectory(dir, (updatedFiles) => {
+      setFiles(updatedFiles);
+    });
+    unwatchRef.current = unwatch;
+
+    const folderName = dir.split("/").pop() || dir;
+    const fileName = filePath.split("/").pop() || filePath;
+    const displayName = fileName.replace(/\.excalidraw$/i, "");
+    const now = Date.now();
+
+    window.electronAPI!.addRecentProject({
+      type: "folder", path: dir, displayName: folderName, lastOpened: now,
+    });
+    window.electronAPI!.addRecentProject({
+      type: "file", path: filePath, displayName, lastOpened: now,
+    });
+
+    setRecentProjects((prev) => {
+      const filtered = prev.filter((p) => p.path !== dir && p.path !== filePath);
+      return [
+        { type: "folder", path: dir, displayName: folderName, lastOpened: now },
+        { type: "file", path: filePath, displayName, lastOpened: now },
+        ...filtered,
+      ].slice(0, 20);
+    });
+  }, []);
+
+  // 监听菜单栏操作
+  useEffect(() => {
+    if (!isDesktop) return;
+    const unlisten = window.electronAPI!.onMenuAction((action: string) => {
+      if (action === "select-directory") {
+        openDirectory();
+      } else if (action === "select-file") {
+        openFile();
+      }
+    });
+    return () => unlisten();
+  }, [openDirectory, openFile]);
+
+  // Open recent project
+  const openRecent = useCallback(async (entry: RecentEntry) => {
+    if (!isDesktop) return;
+
+    const targetPath = entry.type === "folder" ? entry.path : entry.path.split("/").slice(0, -1).join("/");
+
+    setDirectory(targetPath);
+    setActiveFile(entry.type === "file" ? entry.path : null);
+    setError(null);
+
+    if (unwatchRef.current) {
+      unwatchRef.current();
+      unwatchRef.current = null;
+    }
+
+    const result = await window.electronAPI!.listFiles(targetPath);
     if ("error" in result) {
       setError(result.error);
       setFiles([]);
@@ -116,15 +186,13 @@ export default function App() {
     setFiles(result as ProjectFile[]);
 
     const unwatch = window.electronAPI!.watchDirectory(
-      recent.directory,
-      (updatedFiles) => {
-        setFiles(updatedFiles);
-      },
+      targetPath,
+      (updatedFiles) => setFiles(updatedFiles),
     );
     unwatchRef.current = unwatch;
 
-    const updated: RecentProject = {
-      ...recent,
+    const updated: RecentEntry = {
+      ...entry,
       lastOpened: Date.now(),
     };
     window.electronAPI!.addRecentProject(updated);
@@ -165,11 +233,12 @@ export default function App() {
     setActiveFile(filePath);
     setError(null);
 
-    // Update recent project's lastFile
     if (isDesktop && directory) {
+      const fileName = filePath.split("/").pop() || filePath;
       window.electronAPI!.addRecentProject({
-        directory,
-        lastFile: filePath,
+        type: "file",
+        path: filePath,
+        displayName: fileName.replace(/\.excalidraw$/i, ""),
         lastOpened: Date.now(),
       });
     }
@@ -241,26 +310,35 @@ export default function App() {
       <div className="app-container">
         <div className="welcome-screen" style={{ flex: 1 }}>
           <h1>Excalidraw Desktop</h1>
-          <p>打开一个包含 .excalidraw 文件的文件夹，开始编辑你的白板。</p>
+          <p>打开一个包含 .excalidraw 文件的文件夹，或直接打开文件开始编辑。</p>
           {isDesktop ? (
             <>
-              <button className="welcome-btn" onClick={openDirectory}>
-                打开文件夹
-              </button>
+              <div className="welcome-buttons">
+                <button className="welcome-btn" onClick={openDirectory}>
+                  打开文件夹
+                </button>
+                <button className="welcome-btn" onClick={openFile}>
+                  打开文件
+                </button>
+              </div>
               {recentProjects.length > 0 && (
                 <div className="recent-projects">
                   <h3>最近打开</h3>
-                  {recentProjects.map((p) => (
+                  {recentProjects.map((entry) => (
                     <div
                       className="recent-item"
-                      key={p.directory}
-                      onClick={() => openRecent(p)}
+                      key={entry.path}
+                      onClick={() => openRecent(entry)}
                     >
-                      <span className="recent-dir">
-                        {p.directory.split("/").pop() || p.directory}
+                      <span className="recent-icon">
+                        {entry.type === "folder" ? "\u{1F4C1}" : "\u{1F4DD}"}
+                      </span>
+                      <span className="recent-dir">{entry.displayName}</span>
+                      <span className="recent-type-badge">
+                        {entry.type === "folder" ? "文件夹" : "文件"}
                       </span>
                       <span className="recent-time">
-                        {formatTime(p.lastOpened)}
+                        {formatTime(entry.lastOpened)}
                       </span>
                     </div>
                   ))}
