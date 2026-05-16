@@ -1,18 +1,17 @@
-import { app, BrowserWindow, ipcMain, dialog, Menu } from "electron";
+import { app, BrowserWindow, ipcMain, dialog, Tray, Menu, nativeImage, shell } from "electron";
 import { join, resolve } from "path";
 import * as fs from "fs";
+import { startServer, isServerRunning, getServerPort } from "./http-server";
+
+let mainWindow: BrowserWindow | null = null;
+let tray: Tray | null = null;
+let isQuitting = false;
 
 function isPathSafe(targetPath: string): boolean {
-  // Reject null bytes (path traversal attacks)
   if (targetPath.includes("\0")) return false;
-  // Resolve and verify no traversal patterns
-  const resolved = resolve(targetPath);
-  // If the raw input contains ".." it's a traversal attempt
   if (targetPath.includes("..")) return false;
   return true;
 }
-
-let mainWindow: BrowserWindow | null = null;
 
 const RECENT_PROJECTS_FILE = "recent-projects.json";
 
@@ -41,6 +40,78 @@ function writeRecentProjects(projects: RecentEntry[]) {
   fs.writeFileSync(getRecentProjectsPath(), JSON.stringify(projects, null, 2));
 }
 
+// ── Tray ────────────────────────────────────────────────────────────────────
+
+function createTray() {
+  let iconPath: string;
+  if (app.isPackaged) {
+    iconPath = join(process.resourcesPath, "assets", "tray-icon.png");
+  } else {
+    iconPath = join(__dirname, "../../build-assets/tray-icon.png");
+  }
+  let trayIcon = nativeImage.createFromPath(iconPath);
+
+  if (trayIcon.isEmpty()) {
+    console.warn(`[Tray] Icon not found at: ${iconPath}`);
+    trayIcon = nativeImage.createEmpty();
+  }
+
+  if (process.platform === "linux") {
+    trayIcon = trayIcon.resize({ width: 22, height: 22 });
+  }
+
+  tray = new Tray(trayIcon);
+  tray.setToolTip("Excalidraw Desktop");
+
+  const contextMenu = Menu.buildFromTemplate([
+    {
+      label: "打开 Excalidraw",
+      click: () => {
+        if (mainWindow) {
+          mainWindow.show();
+          mainWindow.focus();
+        }
+      },
+    },
+    {
+      label: "打开 WebUI",
+      click: async () => {
+        try {
+          if (!isServerRunning()) {
+            const rendererDir = join(__dirname, "../renderer");
+            await startServer(rendererDir, app.getPath("userData"));
+          }
+          await shell.openExternal(`http://127.0.0.1:${getServerPort()}`);
+        } catch (err: any) {
+          dialog.showErrorBox("WebUI 启动失败", err.message);
+        }
+      },
+    },
+    { type: "separator" },
+    {
+      label: "退出",
+      click: () => {
+        app.quit();
+      },
+    },
+  ]);
+
+  tray.setContextMenu(contextMenu);
+
+  tray.on("click", () => {
+    if (mainWindow) {
+      if (mainWindow.isVisible()) {
+        mainWindow.hide();
+      } else {
+        mainWindow.show();
+        mainWindow.focus();
+      }
+    }
+  });
+}
+
+// ── Window ──────────────────────────────────────────────────────────────────
+
 export function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -55,19 +126,14 @@ export function createWindow() {
     },
   });
 
-  // Capture renderer console messages for debugging
   mainWindow.webContents.on("console-message", (_event, level, message) => {
     const prefix = ["INFO", "WARN", "ERROR"][level] || "LOG";
     console.log(`[Renderer:${prefix}] ${message}`);
   });
 
-  // Capture renderer unhandled errors
-  mainWindow.webContents.on(
-    "unhandled-rejection",
-    (event: Electron.Event) => {
-      console.error("[Renderer:UNHANDLED_REJECTION]", event);
-    },
-  );
+  (mainWindow.webContents as any).on("unhandled-rejection", (_event: any) => {
+    console.error("[Renderer:UNHANDLED_REJECTION]", _event);
+  });
 
   if (process.env.ELECTRON_RENDERER_URL) {
     mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
@@ -75,6 +141,14 @@ export function createWindow() {
   } else {
     mainWindow.loadFile(join(__dirname, "../renderer/index.html"));
   }
+
+  // Window close → hide to tray
+  mainWindow.on("close", (event) => {
+    if (!isQuitting) {
+      event.preventDefault();
+      mainWindow?.hide();
+    }
+  });
 
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -171,7 +245,6 @@ ipcMain.handle("read-file", async (_event, filePath: string) => {
 
 ipcMain.handle("write-file", async (_event, filePath: string, content: string) => {
   try {
-    // Validate JSON before writing
     JSON.parse(content);
     fs.writeFileSync(filePath, content, "utf-8");
     return { success: true };
@@ -202,7 +275,6 @@ ipcMain.handle("watch-directory", async (_event, dir: string, channel: string) =
   try {
     const watcher = fs.watch(dir, (eventType) => {
       if (eventType === "rename" && mainWindow) {
-        // Re-list files and send to renderer
         try {
           const entries = fs.readdirSync(dir, { withFileTypes: true });
           const files = entries
@@ -244,13 +316,16 @@ ipcMain.handle("add-recent-project", async (_event, entry: RecentEntry) => {
   writeRecentProjects(filtered.slice(0, 20));
 });
 
-app.whenReady().then(() => {
-  const isMac = process.platform === "darwin";
+// ── App Lifecycle ───────────────────────────────────────────────────────────
 
+app.whenReady().then(() => {
+  createWindow();
+  createTray();
+
+  // Custom application menu
+  const isMac = process.platform === "darwin";
   const menuTemplate: Electron.MenuItemConstructorOptions[] = [
-    // macOS app menu
     ...(isMac ? [{ role: "appMenu" as const }] : []),
-    // Custom file menu
     {
       label: "文件",
       submenu: [
@@ -270,13 +345,15 @@ app.whenReady().then(() => {
         },
       ],
     },
-    // Standard menus
     { role: "editMenu" },
     { role: "viewMenu" },
     { role: "windowMenu" },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate));
-  createWindow();
+
+  app.on("before-quit", () => {
+    isQuitting = true;
+  });
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -285,8 +362,4 @@ app.whenReady().then(() => {
   });
 });
 
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
-    app.quit();
-  }
-});
+// Window-all-closed is intentionally not handled — app stays alive in tray

@@ -9,7 +9,48 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "start": "electron .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build:rpm": "yarn build && electron-builder --linux rpm",
+    "build:linux": "yarn build && electron-builder --linux"
+  },
+  "build": {
+    "appId": "com.excalidraw.desktop",
+    "productName": "Excalidraw Desktop",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build-assets/",
+        "to": "assets/",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "linux": {
+      "target": [
+        "rpm"
+      ],
+      "category": "Graphics",
+      "icon": "build-assets/icon.png",
+      "executableName": "excalidraw-desktop",
+      "synopsis": "Excalidraw Desktop - Virtual whiteboard",
+      "description": "A virtual whiteboard for sketching hand-drawn like diagrams",
+      "maintainer": "Excalidraw Desktop <dev@excalidraw.com>"
+    },
+    "electronVersion": "33.4.11",
+    "npmRebuild": false,
+    "rpm": {
+      "depends": [
+        "libappindicator-gtk3",
+        "libXScrnSaver"
+      ]
+    }
   },
   "dependencies": {
     "@excalidraw/excalidraw": "*",
@@ -28,6 +69,20 @@
     "sass": "^1.80.0",
     "typescript": "^5.7.0",
     "vite": "^5.4.0",
-    "@vitejs/plugin-react": "^4.3.0"
-  }
+    "@vitejs/plugin-react": "^4.3.0",
+    "electron-builder": "^25.0.0"
+  },
+  "description": "Excalidraw Desktop - A virtual whiteboard for sketching hand-drawn like diagrams",
+  "keywords": [],
+  "author": {
+    "name": "Excalidraw Desktop",
+    "email": "dev@excalidraw.com"
+  },
+  "homepage": "https://excalidraw.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/excalidraw/excalidraw.git"
+  },
+  "license": "ISC",
+  "type": "commonjs"
 }
