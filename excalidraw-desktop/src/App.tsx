@@ -36,6 +36,13 @@ export default function App() {
   const [recentProjects, setRecentProjects] = useState<RecentEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(260);
+  const [contextMenu, setContextMenu] = useState<{
+    filePath: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const [renamingFile, setRenamingFile] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
   const unwatchRef = useRef<(() => void) | null>(null);
 
   // Load recent projects on mount
@@ -244,6 +251,61 @@ export default function App() {
     }
   }, [directory]);
 
+  const openContextMenu = useCallback(
+    (e: React.MouseEvent, filePath: string) => {
+      e.stopPropagation();
+      setContextMenu({ filePath, x: e.clientX, y: e.clientY });
+    },
+    [],
+  );
+
+  const startRename = useCallback((filePath: string, currentName: string) => {
+    setRenamingFile(filePath);
+    setRenameValue(currentName.replace(/\.excalidraw$/i, ""));
+    setContextMenu(null);
+  }, []);
+
+  const confirmRename = useCallback(async () => {
+    if (!renamingFile || !renameValue.trim()) {
+      setRenamingFile(null);
+      return;
+    }
+    const newName = renameValue.trim() + ".excalidraw";
+    const result = await window.electronAPI!.renameFile(renamingFile, newName);
+    if (result.error) {
+      setError(result.error);
+      return;
+    }
+    setRenamingFile(null);
+    if (result.newPath) {
+      setFiles((prev) =>
+        prev.map((f) =>
+          f.path === renamingFile
+            ? { ...f, name: newName, path: result.newPath! }
+            : f,
+        ),
+      );
+      setActiveFile((prev) => (prev === renamingFile ? result.newPath! : prev));
+    }
+  }, [renamingFile, renameValue]);
+
+  const confirmDelete = useCallback(async () => {
+    if (!contextMenu) return;
+    const filePath = contextMenu.filePath;
+    setContextMenu(null);
+
+    const confirmed = window.confirm("确定要删除这个文件吗？此操作不可撤销。");
+    if (!confirmed) return;
+
+    const result = await window.electronAPI!.deleteFile(filePath);
+    if (result.error) {
+      setError(result.error);
+      return;
+    }
+    setFiles((prev) => prev.filter((f) => f.path !== filePath));
+    setActiveFile((prev) => (prev === filePath ? null : prev));
+  }, [contextMenu]);
+
   // Handle Ctrl+N, Ctrl+S
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -276,6 +338,12 @@ export default function App() {
     const timer = setTimeout(() => setError(null), 4000);
     return () => clearTimeout(timer);
   }, [error]);
+
+  useEffect(() => {
+    const handler = () => setContextMenu(null);
+    window.addEventListener("click", handler);
+    return () => window.removeEventListener("click", handler);
+  }, []);
 
   // ── Sidebar resize ────────────────────────────────────────────────────
   const resizing = useRef(false);
@@ -383,17 +451,72 @@ export default function App() {
           ) : (
             files.map((file) => (
               <div
-                className={`file-item ${activeFile === file.path ? "active" : ""}`}
+                className={`file-item ${activeFile === file.path ? "active" : ""} ${renamingFile === file.path ? "renaming" : ""}`}
                 key={file.path}
-                onClick={() => switchFile(file.path)}
+                onClick={() => {
+                  if (renamingFile !== file.path) {
+                    switchFile(file.path);
+                  }
+                }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  openContextMenu(e, file.path);
+                }}
               >
                 <span className="file-icon">&#x1F4DD;</span>
-                <span className="file-name">{file.name}</span>
+                {renamingFile === file.path ? (
+                  <input
+                    className="file-rename-input"
+                    value={renameValue}
+                    onChange={(e) => setRenameValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") confirmRename();
+                      if (e.key === "Escape") setRenamingFile(null);
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    autoFocus
+                  />
+                ) : (
+                  <span className="file-name">
+                    {file.name.replace(/\.excalidraw$/i, "")}
+                  </span>
+                )}
                 <span className="file-time">{formatTime(file.modifiedAt)}</span>
+                <span
+                  className="file-menu-trigger"
+                  onClick={(e) => openContextMenu(e, file.path)}
+                  title="更多操作"
+                >
+                  &#8942;
+                </span>
               </div>
             ))
           )}
         </div>
+        {contextMenu && (
+          <div
+            className="context-menu"
+            style={{
+              position: "fixed",
+              left: contextMenu.x,
+              top: contextMenu.y,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              className="context-menu-item"
+              onClick={() => {
+                const file = files.find((f) => f.path === contextMenu.filePath);
+                if (file) startRename(file.path, file.name);
+              }}
+            >
+              重命名
+            </div>
+            <div className="context-menu-item danger" onClick={confirmDelete}>
+              删除
+            </div>
+          </div>
+        )}
       </div>
 
       <div
