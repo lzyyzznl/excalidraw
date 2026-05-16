@@ -20,6 +20,10 @@ import type {
 } from "@excalidraw/excalidraw/types";
 import type { ExcalidrawElement } from "@excalidraw/element/types";
 
+import { useHandleLibrary } from "@excalidraw/excalidraw/data/library";
+import type { LibraryPersistedData } from "@excalidraw/excalidraw/data/library";
+import { createStore, get, set } from "idb-keyval";
+
 import { readProjectFile, writeProjectFile } from "./ProjectFileManager";
 import { ttdPersistenceAdapter } from "./AIPersistenceAdapter";
 
@@ -30,6 +34,33 @@ const AUTO_SAVE_MS = 500;
 const AI_BACKEND =
   import.meta.env.VITE_APP_AI_BACKEND ||
   "https://oss-ai.excalidraw.com";
+
+/** IndexedDB adapter for persisting library (素材库) items.
+ *  Matches the pattern used by excalidraw-app. */
+class LibraryIndexedDBAdapter {
+  private static idb_name = "excalidraw-library";
+  private static key = "libraryData";
+  private static store = createStore(
+    `${LibraryIndexedDBAdapter.idb_name}-db`,
+    `${LibraryIndexedDBAdapter.idb_name}-store`,
+  );
+
+  static async load() {
+    const data = await get<LibraryPersistedData>(
+      LibraryIndexedDBAdapter.key,
+      LibraryIndexedDBAdapter.store,
+    );
+    return data || null;
+  }
+
+  static save(data: LibraryPersistedData): Promise<void> {
+    return set(
+      LibraryIndexedDBAdapter.key,
+      data,
+      LibraryIndexedDBAdapter.store,
+    );
+  }
+}
 
 interface ExcalidrawEditorProps {
   filePath: string;
@@ -157,6 +188,14 @@ export default function ExcalidrawEditor({
   const handleApiReady = useCallback((api: ExcalidrawImperativeAPI) => {
     apiRef.current = api;
   }, []);
+
+  // ── Library (素材库) support ──────────────────────────────────────────────
+  // Listens for hashchange events from libraries.excalidraw.com and persists
+  // library items to IndexedDB.
+  useHandleLibrary({
+    excalidrawAPI: apiRef.current,
+    adapter: LibraryIndexedDBAdapter,
+  });
 
   // ── AI Text-to-Diagram ──────────────────────────────────────────────────
   // TTDStreamFetch handles all error cases internally and returns the correct

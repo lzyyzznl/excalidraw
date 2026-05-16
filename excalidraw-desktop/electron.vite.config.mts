@@ -27,6 +27,7 @@ export default defineConfig({
   },
   renderer: {
     root: "src",
+    envDir: path.resolve(__dirname, ".."),
     build: {
       outDir: "dist/renderer",
       rollupOptions: {
