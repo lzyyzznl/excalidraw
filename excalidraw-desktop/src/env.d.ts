@@ -4,15 +4,17 @@ interface ProjectFile {
   modifiedAt: number;
 }
 
-interface RecentProject {
-  directory: string;
-  lastFile: string | null;
+interface RecentEntry {
+  type: "folder" | "file";
+  path: string;
+  displayName: string;
   lastOpened: number;
 }
 
 interface ElectronAPI {
   platform: string;
   selectDirectory(): Promise<string | null>;
+  selectFile(): Promise<string | null>;
   listFiles(
     dir: string,
   ): Promise<
@@ -28,12 +30,20 @@ interface ElectronAPI {
     dir: string,
     name: string,
   ): Promise<{ path?: string; error?: string }>;
+  renameFile(
+    oldPath: string,
+    newName: string,
+  ): Promise<{ newPath?: string; error?: string }>;
+  deleteFile(
+    filePath: string,
+  ): Promise<{ success?: boolean; error?: string }>;
   watchDirectory(
     dir: string,
     callback: (files: ProjectFile[]) => void,
   ): () => void;
-  getRecentProjects(): Promise<RecentProject[]>;
-  addRecentProject(project: RecentProject): Promise<void>;
+  getRecentProjects(): Promise<RecentEntry[]>;
+  addRecentProject(entry: RecentEntry): Promise<void>;
+  onMenuAction(callback: (action: string) => void): () => void;
 }
 
 declare global {
