@@ -1,8 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Excalidraw,
-  defaultLang,
-  languages,
   TTDDialog,
   TTDDialogTrigger,
   TTDStreamFetch,
@@ -14,7 +12,6 @@ import {
 import { debounce } from "@excalidraw/common";
 // @ts-expect-error debounce type helper
 import { getDefaultAppState } from "@excalidraw/excalidraw/appState";
-import LanguageDetector from "i18next-browser-languagedetector";
 
 import type {
   ExcalidrawImperativeAPI,
@@ -23,30 +20,18 @@ import type {
 } from "@excalidraw/excalidraw/types";
 import type { ExcalidrawElement } from "@excalidraw/element/types";
 
+import { readProjectFile, writeProjectFile } from "./ProjectFileManager";
+import { ttdPersistenceAdapter } from "./AIPersistenceAdapter";
+
 import { useHandleLibrary } from "@excalidraw/excalidraw/data/library";
 import type { LibraryPersistedData } from "@excalidraw/excalidraw/data/library";
 import { clear, createStore, get, set } from "idb-keyval";
 
-import { readProjectFile, writeProjectFile } from "./ProjectFileManager";
-import { ttdPersistenceAdapter } from "./AIPersistenceAdapter";
+// Memoize to prevent tunnel-rat infinite re-render loop when Excalidraw re-renders.
+// TTDDialogTrigger's children reference changes on every render; React.memo keeps it stable.
+const MemoTTDDialogTrigger = React.memo(TTDDialogTrigger);
 
 const AUTO_SAVE_MS = 500;
-
-const languageDetector = new LanguageDetector();
-languageDetector.init({ languageUtils: {} });
-
-const getPreferredLanguage = () => {
-  const detectedLanguages = languageDetector.detect();
-  const detectedLanguage = Array.isArray(detectedLanguages)
-    ? detectedLanguages[0]
-    : detectedLanguages;
-
-  return (
-    (detectedLanguage
-      ? languages.find((lang) => lang.code.startsWith(detectedLanguage))?.code
-      : null) || defaultLang.code
-  );
-};
 
 const AI_BACKEND = "https://oss-ai.excalidraw.com";
 
@@ -107,8 +92,6 @@ export default function ExcalidrawEditor({
   onError,
   onFileSaved,
 }: ExcalidrawEditorProps) {
-  const [langCode] = useState(getPreferredLanguage);
-
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null);
   const [loading, setLoading] = useState(true);
   const [initialData, setInitialData] = useState<{
@@ -295,7 +278,6 @@ export default function ExcalidrawEditor({
   return (
     <div className="editor-area">
       <Excalidraw
-        langCode={langCode}
         initialData={{
           elements: initialData.elements,
           appState: initialData.appState || undefined,
@@ -306,7 +288,7 @@ export default function ExcalidrawEditor({
         handleKeyboardGlobally={true}
         autoFocus={true}
       >
-        <TTDDialogTrigger />
+        <MemoTTDDialogTrigger />
         <TTDDialog
           onTextSubmit={handleAITextSubmit}
           persistenceAdapter={ttdPersistenceAdapter}
