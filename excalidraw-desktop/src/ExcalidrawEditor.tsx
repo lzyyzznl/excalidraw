@@ -25,7 +25,7 @@ import type { ExcalidrawElement } from "@excalidraw/element/types";
 
 import { useHandleLibrary } from "@excalidraw/excalidraw/data/library";
 import type { LibraryPersistedData } from "@excalidraw/excalidraw/data/library";
-import { createStore, get, set } from "idb-keyval";
+import { clear, createStore, get, set } from "idb-keyval";
 
 import { readProjectFile, writeProjectFile } from "./ProjectFileManager";
 import { ttdPersistenceAdapter } from "./AIPersistenceAdapter";
@@ -48,14 +48,10 @@ const getPreferredLanguage = () => {
   );
 };
 
-// AI backend URL — configurable via VITE_APP_AI_BACKEND env var.
-// Defaults to Excalidraw's public AI backend.
-const AI_BACKEND =
-  import.meta.env.VITE_APP_AI_BACKEND ||
-  "https://oss-ai.excalidraw.com";
+const AI_BACKEND = "https://oss-ai.excalidraw.com";
 
 /** IndexedDB adapter for persisting library (素材库) items.
- *  Matches the pattern used by excalidraw-app. */
+ *  Auto-recovers from corrupted/stale IndexedDB by clearing and recreating. */
 class LibraryIndexedDBAdapter {
   private static idb_name = "excalidraw-library";
   private static key = "libraryData";
@@ -65,19 +61,38 @@ class LibraryIndexedDBAdapter {
   );
 
   static async load() {
-    const data = await get<LibraryPersistedData>(
-      LibraryIndexedDBAdapter.key,
-      LibraryIndexedDBAdapter.store,
+    return LibraryIndexedDBAdapter.withRecovery(() =>
+      get<LibraryPersistedData>(
+        LibraryIndexedDBAdapter.key,
+        LibraryIndexedDBAdapter.store,
+      ),
     );
-    return data || null;
   }
 
   static save(data: LibraryPersistedData): Promise<void> {
-    return set(
-      LibraryIndexedDBAdapter.key,
-      data,
-      LibraryIndexedDBAdapter.store,
+    return LibraryIndexedDBAdapter.withRecovery(() =>
+      set(LibraryIndexedDBAdapter.key, data, LibraryIndexedDBAdapter.store),
     );
+  }
+
+  /** Attempt the operation; on IndexedDB error, clear the DB and retry once. */
+  private static async withRecovery<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } catch (error: any) {
+      if (
+        error?.name === "UnknownError" ||
+        /indexeddatabase|backing store/i.test(error?.message || "")
+      ) {
+        console.warn(
+          "Library IndexedDB corrupted, clearing and retrying...",
+          error,
+        );
+        await clear(LibraryIndexedDBAdapter.store);
+        return fn();
+      }
+      throw error;
+    }
   }
 }
 
