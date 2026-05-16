@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, shrink-to-fit=no"
+    />
+    <meta name="theme-color" content="#000000" />
+    <title>Excalidraw Desktop</title>
+    <script>
+      // Set asset path for font loading - use CDN fallback
+      // In production, this can be overridden to local path via preload
+      window.EXCALIDRAW_ASSET_PATH = "https://esm.sh/@excalidraw/excalidraw/dist/prod/";
+    </script>
+  </head>
+  <body>
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <div id="root"></div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>
