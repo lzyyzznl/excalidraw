@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Excalidraw,
+  defaultLang,
+  languages,
   TTDDialog,
   TTDDialogTrigger,
   TTDStreamFetch,
@@ -12,6 +14,7 @@ import {
 import { debounce } from "@excalidraw/common";
 // @ts-expect-error debounce type helper
 import { getDefaultAppState } from "@excalidraw/excalidraw/appState";
+import LanguageDetector from "i18next-browser-languagedetector";
 
 import type {
   ExcalidrawImperativeAPI,
@@ -28,6 +31,22 @@ import { readProjectFile, writeProjectFile } from "./ProjectFileManager";
 import { ttdPersistenceAdapter } from "./AIPersistenceAdapter";
 
 const AUTO_SAVE_MS = 500;
+
+const languageDetector = new LanguageDetector();
+languageDetector.init({ languageUtils: {} });
+
+const getPreferredLanguage = () => {
+  const detectedLanguages = languageDetector.detect();
+  const detectedLanguage = Array.isArray(detectedLanguages)
+    ? detectedLanguages[0]
+    : detectedLanguages;
+
+  return (
+    (detectedLanguage
+      ? languages.find((lang) => lang.code.startsWith(detectedLanguage))?.code
+      : null) || defaultLang.code
+  );
+};
 
 // AI backend URL — configurable via VITE_APP_AI_BACKEND env var.
 // Defaults to Excalidraw's public AI backend.
@@ -73,6 +92,8 @@ export default function ExcalidrawEditor({
   onError,
   onFileSaved,
 }: ExcalidrawEditorProps) {
+  const [langCode] = useState(getPreferredLanguage);
+
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null);
   const [loading, setLoading] = useState(true);
   const [initialData, setInitialData] = useState<{
@@ -259,6 +280,7 @@ export default function ExcalidrawEditor({
   return (
     <div className="editor-area">
       <Excalidraw
+        langCode={langCode}
         initialData={{
           elements: initialData.elements,
           appState: initialData.appState || undefined,
