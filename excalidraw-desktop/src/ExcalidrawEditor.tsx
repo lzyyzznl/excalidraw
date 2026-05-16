@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Excalidraw } from "@excalidraw/excalidraw";
+import {
+  Excalidraw,
+  TTDDialog,
+  TTDDialogTrigger,
+  TTDStreamFetch,
+} from "@excalidraw/excalidraw";
 import {
   restoreAppState,
   restoreElements,
@@ -16,8 +21,15 @@ import type {
 import type { ExcalidrawElement } from "@excalidraw/element/types";
 
 import { readProjectFile, writeProjectFile } from "./ProjectFileManager";
+import { ttdPersistenceAdapter } from "./AIPersistenceAdapter";
 
 const AUTO_SAVE_MS = 500;
+
+// AI backend URL — configurable via VITE_APP_AI_BACKEND env var.
+// Defaults to Excalidraw's public AI backend.
+const AI_BACKEND =
+  import.meta.env.VITE_APP_AI_BACKEND ||
+  "https://oss-ai.excalidraw.com";
 
 interface ExcalidrawEditorProps {
   filePath: string;
@@ -146,6 +158,29 @@ export default function ExcalidrawEditor({
     apiRef.current = api;
   }, []);
 
+  // ── AI Text-to-Diagram ──────────────────────────────────────────────────
+  // TTDStreamFetch handles all error cases internally and returns the correct
+  // OnTextSubmitRetValue type expected by TTDDialog
+  const handleAITextSubmit = useCallback(
+    async (props: {
+      messages: Array<{ role: "user" | "assistant"; content: string }>;
+      onChunk?: (chunk: string) => void;
+      onStreamCreated?: () => void;
+      signal?: AbortSignal;
+    }) => {
+      const { onChunk, onStreamCreated, signal, messages } = props;
+      return TTDStreamFetch({
+        url: `${AI_BACKEND}/v1/ai/text-to-diagram/chat-streaming`,
+        messages,
+        onChunk,
+        onStreamCreated,
+        extractRateLimits: true,
+        signal,
+      });
+    },
+    [],
+  );
+
   if (loading) {
     return (
       <div
@@ -194,7 +229,13 @@ export default function ExcalidrawEditor({
         detectScroll={false}
         handleKeyboardGlobally={true}
         autoFocus={true}
-      />
+      >
+        <TTDDialogTrigger />
+        <TTDDialog
+          onTextSubmit={handleAITextSubmit}
+          persistenceAdapter={ttdPersistenceAdapter}
+        />
+      </Excalidraw>
     </div>
   );
 }
