@@ -47,12 +47,14 @@ export default function App() {
 
   // Load recent projects on mount
   useEffect(() => {
+    const loadRecent = (raw: RecentEntry[]) =>
+      setRecentProjects(raw.filter((e) => e.path));
     if (isDesktop) {
-      window.electronAPI!.getRecentProjects().then(setRecentProjects);
+      window.electronAPI!.getRecentProjects().then(loadRecent);
     } else {
       try {
         const saved = localStorage.getItem("excalidraw-desktop-recent");
-        if (saved) setRecentProjects(JSON.parse(saved));
+        if (saved) loadRecent(JSON.parse(saved));
       } catch {}
     }
   }, []);
