@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "outDir": "./dist",
+    "baseUrl": ".",
+    "paths": {
+      "@excalidraw/excalidraw": ["../packages/excalidraw/index.tsx"],
+      "@excalidraw/excalidraw/*": ["../packages/excalidraw/*"],
+      "@excalidraw/element": ["../packages/element/src/index.ts"],
+      "@excalidraw/element/*": ["../packages/element/src/*"],
+      "@excalidraw/common": ["../packages/common/src/index.ts"],
+      "@excalidraw/common/*": ["../packages/common/src/*"],
+      "@excalidraw/math": ["../packages/math/src/index.ts"],
+      "@excalidraw/math/*": ["../packages/math/src/*"],
+      "@excalidraw/fractional-indexing": ["../packages/fractional-indexing/src/index.ts"],
+      "@excalidraw/utils": ["../packages/utils/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*", "electron/**/*"],
+  "exclude": ["node_modules", "dist"]
+}
