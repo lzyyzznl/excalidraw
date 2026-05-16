@@ -1,8 +1,17 @@
-import { app, BrowserWindow, ipcMain, dialog } from "electron";
-import { join } from "path";
+import { app, BrowserWindow, ipcMain, dialog, Tray, Menu, nativeImage, shell } from "electron";
+import { join, resolve } from "path";
 import * as fs from "fs";
+import { startServer, isServerRunning, getServerPort } from "./http-server";
 
 let mainWindow: BrowserWindow | null = null;
+let tray: Tray | null = null;
+let isQuitting = false;
+
+function isPathSafe(targetPath: string): boolean {
+  if (targetPath.includes("\0")) return false;
+  if (targetPath.includes("..")) return false;
+  return true;
+}
 
 const RECENT_PROJECTS_FILE = "recent-projects.json";
 
@@ -10,11 +19,14 @@ function getRecentProjectsPath(): string {
   return join(app.getPath("userData"), RECENT_PROJECTS_FILE);
 }
 
-function readRecentProjects(): Array<{
-  directory: string;
-  lastFile: string | null;
+interface RecentEntry {
+  type: "folder" | "file";
+  path: string;
+  displayName: string;
   lastOpened: number;
-}> {
+}
+
+function readRecentProjects(): RecentEntry[] {
   try {
     const filePath = getRecentProjectsPath();
     if (!fs.existsSync(filePath)) return [];
@@ -24,15 +36,81 @@ function readRecentProjects(): Array<{
   }
 }
 
-function writeRecentProjects(
-  projects: Array<{
-    directory: string;
-    lastFile: string | null;
-    lastOpened: number;
-  }>,
-) {
+function writeRecentProjects(projects: RecentEntry[]) {
   fs.writeFileSync(getRecentProjectsPath(), JSON.stringify(projects, null, 2));
 }
+
+// ── Tray ────────────────────────────────────────────────────────────────────
+
+function createTray() {
+  let iconPath: string;
+  if (app.isPackaged) {
+    iconPath = join(process.resourcesPath, "assets", "tray-icon.png");
+  } else {
+    iconPath = join(__dirname, "../../build-assets/tray-icon.png");
+  }
+  let trayIcon = nativeImage.createFromPath(iconPath);
+
+  if (trayIcon.isEmpty()) {
+    console.warn(`[Tray] Icon not found at: ${iconPath}`);
+    trayIcon = nativeImage.createEmpty();
+  }
+
+  if (process.platform === "linux") {
+    trayIcon = trayIcon.resize({ width: 22, height: 22 });
+  }
+
+  tray = new Tray(trayIcon);
+  tray.setToolTip("Excalidraw Desktop");
+
+  const contextMenu = Menu.buildFromTemplate([
+    {
+      label: "打开 Excalidraw",
+      click: () => {
+        if (mainWindow) {
+          mainWindow.show();
+          mainWindow.focus();
+        }
+      },
+    },
+    {
+      label: "打开 WebUI",
+      click: async () => {
+        try {
+          if (!isServerRunning()) {
+            const rendererDir = join(__dirname, "../renderer");
+            await startServer(rendererDir, app.getPath("userData"));
+          }
+          await shell.openExternal(`http://127.0.0.1:${getServerPort()}`);
+        } catch (err: any) {
+          dialog.showErrorBox("WebUI 启动失败", err.message);
+        }
+      },
+    },
+    { type: "separator" },
+    {
+      label: "退出",
+      click: () => {
+        app.quit();
+      },
+    },
+  ]);
+
+  tray.setContextMenu(contextMenu);
+
+  tray.on("click", () => {
+    if (mainWindow) {
+      if (mainWindow.isVisible()) {
+        mainWindow.hide();
+      } else {
+        mainWindow.show();
+        mainWindow.focus();
+      }
+    }
+  });
+}
+
+// ── Window ──────────────────────────────────────────────────────────────────
 
 export function createWindow() {
   mainWindow = new BrowserWindow({
@@ -48,19 +126,14 @@ export function createWindow() {
     },
   });
 
-  // Capture renderer console messages for debugging
   mainWindow.webContents.on("console-message", (_event, level, message) => {
     const prefix = ["INFO", "WARN", "ERROR"][level] || "LOG";
     console.log(`[Renderer:${prefix}] ${message}`);
   });
 
-  // Capture renderer unhandled errors
-  mainWindow.webContents.on(
-    "unhandled-rejection",
-    (event: Electron.Event) => {
-      console.error("[Renderer:UNHANDLED_REJECTION]", event);
-    },
-  );
+  (mainWindow.webContents as any).on("unhandled-rejection", (_event: any) => {
+    console.error("[Renderer:UNHANDLED_REJECTION]", _event);
+  });
 
   if (process.env.ELECTRON_RENDERER_URL) {
     mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
@@ -68,6 +141,14 @@ export function createWindow() {
   } else {
     mainWindow.loadFile(join(__dirname, "../renderer/index.html"));
   }
+
+  // Window close → hide to tray
+  mainWindow.on("close", (event) => {
+    if (!isQuitting) {
+      event.preventDefault();
+      mainWindow?.hide();
+    }
+  });
 
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -82,6 +163,47 @@ ipcMain.handle("select-directory", async () => {
     properties: ["openDirectory"],
   });
   return result.canceled ? null : result.filePaths[0];
+});
+
+ipcMain.handle("select-file", async () => {
+  if (!mainWindow) return null;
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ["openFile"],
+    filters: [{ name: "Excalidraw", extensions: ["excalidraw"] }],
+  });
+  return result.canceled ? null : result.filePaths[0];
+});
+
+ipcMain.handle("rename-file", async (_event, oldPath: string, newName: string) => {
+  try {
+    if (!isPathSafe(oldPath)) {
+      return { error: "Invalid path" };
+    }
+    if (/[/\\]/.test(newName)) {
+      return { error: "文件名不能包含路径分隔符" };
+    }
+    const dir = join(oldPath, "..");
+    const newPath = join(dir, newName);
+    if (fs.existsSync(newPath)) {
+      return { error: "文件名已存在" };
+    }
+    fs.renameSync(oldPath, newPath);
+    return { newPath };
+  } catch (err: any) {
+    return { error: err.message };
+  }
+});
+
+ipcMain.handle("delete-file", async (_event, filePath: string) => {
+  try {
+    if (!isPathSafe(filePath)) {
+      return { error: "Invalid path" };
+    }
+    fs.unlinkSync(filePath);
+    return { success: true };
+  } catch (err: any) {
+    return { error: err.message };
+  }
 });
 
 ipcMain.handle("list-files", async (_event, dir: string) => {
@@ -123,7 +245,6 @@ ipcMain.handle("read-file", async (_event, filePath: string) => {
 
 ipcMain.handle("write-file", async (_event, filePath: string, content: string) => {
   try {
-    // Validate JSON before writing
     JSON.parse(content);
     fs.writeFileSync(filePath, content, "utf-8");
     return { success: true };
@@ -154,7 +275,6 @@ ipcMain.handle("watch-directory", async (_event, dir: string, channel: string) =
   try {
     const watcher = fs.watch(dir, (eventType) => {
       if (eventType === "rename" && mainWindow) {
-        // Re-list files and send to renderer
         try {
           const entries = fs.readdirSync(dir, { withFileTypes: true });
           const files = entries
@@ -189,17 +309,51 @@ ipcMain.handle("get-recent-projects", async () => {
   return readRecentProjects();
 });
 
-ipcMain.handle("add-recent-project", async (_event, project) => {
+ipcMain.handle("add-recent-project", async (_event, entry: RecentEntry) => {
   const projects = readRecentProjects();
-  // Remove duplicate directory entry
-  const filtered = projects.filter((p) => p.directory !== project.directory);
-  filtered.unshift(project);
-  // Keep only last 20
+  const filtered = projects.filter((p) => p.path !== entry.path);
+  filtered.unshift(entry);
   writeRecentProjects(filtered.slice(0, 20));
 });
 
+// ── App Lifecycle ───────────────────────────────────────────────────────────
+
 app.whenReady().then(() => {
   createWindow();
+  createTray();
+
+  // Custom application menu
+  const isMac = process.platform === "darwin";
+  const menuTemplate: Electron.MenuItemConstructorOptions[] = [
+    ...(isMac ? [{ role: "appMenu" as const }] : []),
+    {
+      label: "文件",
+      submenu: [
+        {
+          label: "打开文件夹",
+          accelerator: "CmdOrCtrl+O",
+          click: () => {
+            mainWindow?.webContents.send("menu-action", "select-directory");
+          },
+        },
+        {
+          label: "打开文件",
+          accelerator: "CmdOrCtrl+Shift+O",
+          click: () => {
+            mainWindow?.webContents.send("menu-action", "select-file");
+          },
+        },
+      ],
+    },
+    { role: "editMenu" },
+    { role: "viewMenu" },
+    { role: "windowMenu" },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate));
+
+  app.on("before-quit", () => {
+    isQuitting = true;
+  });
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -208,8 +362,4 @@ app.whenReady().then(() => {
   });
 });
 
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
-    app.quit();
-  }
-});
+// Window-all-closed is intentionally not handled — app stays alive in tray
