@@ -162,6 +162,33 @@ async function handleApiRequest(
     return;
   }
 
+  // POST /api/files/rename
+  if (pathname === "/api/files/rename" && req.method === "POST") {
+    try {
+      const body = await readBody();
+      if (!body.oldPath || !body.newName) return sendError(400, "Missing 'oldPath' or 'newName'");
+      if (!isPathSafe(body.oldPath)) return sendError(400, "Invalid path");
+      const dir = path.dirname(body.oldPath);
+      const newPath = path.join(dir, body.newName);
+      if (fs.existsSync(newPath)) return sendError(409, "文件名已存在");
+      fs.renameSync(body.oldPath, newPath);
+      sendJson(200, { newPath });
+    } catch (err: any) { sendError(500, err.message); }
+    return;
+  }
+
+  // POST /api/files/delete
+  if (pathname === "/api/files/delete" && req.method === "POST") {
+    try {
+      const body = await readBody();
+      if (!body.filePath) return sendError(400, "Missing 'filePath'");
+      if (!isPathSafe(body.filePath)) return sendError(400, "Invalid path");
+      fs.unlinkSync(body.filePath);
+      sendJson(200, { success: true });
+    } catch (err: any) { sendError(500, err.message); }
+    return;
+  }
+
   // GET /api/files/poll?dir=xxx&since=timestamp
   if (pathname === "/api/files/poll" && req.method === "GET") {
     const dir = query.dir as string;
@@ -198,6 +225,12 @@ async function handleApiRequest(
       fs.writeFileSync(recentPath, JSON.stringify(filtered.slice(0, MAX_RECENT_PROJECTS), null, 2));
       sendJson(200, { success: true });
     } catch (err: any) { sendError(500, err.message); }
+    return;
+  }
+
+  // GET /api/files/select — not available in WebUI
+  if (pathname === "/api/files/select") {
+    sendError(400, "WebUI does not support file selection. Please use the desktop application.");
     return;
   }
 
