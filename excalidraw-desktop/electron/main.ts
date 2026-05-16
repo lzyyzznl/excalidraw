@@ -1,6 +1,15 @@
 import { app, BrowserWindow, ipcMain, dialog, Menu } from "electron";
-import { join } from "path";
+import { join, resolve } from "path";
 import * as fs from "fs";
+
+function isPathSafe(targetPath: string): boolean {
+  try {
+    resolve(targetPath);
+    return !targetPath.includes("\0");
+  } catch {
+    return false;
+  }
+}
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -92,6 +101,12 @@ ipcMain.handle("select-file", async () => {
 
 ipcMain.handle("rename-file", async (_event, oldPath: string, newName: string) => {
   try {
+    if (!isPathSafe(oldPath)) {
+      return { error: "Invalid path" };
+    }
+    if (/[/\\]/.test(newName)) {
+      return { error: "文件名不能包含路径分隔符" };
+    }
     const dir = join(oldPath, "..");
     const newPath = join(dir, newName);
     if (fs.existsSync(newPath)) {
@@ -106,6 +121,9 @@ ipcMain.handle("rename-file", async (_event, oldPath: string, newName: string) =
 
 ipcMain.handle("delete-file", async (_event, filePath: string) => {
   try {
+    if (!isPathSafe(filePath)) {
+      return { error: "Invalid path" };
+    }
     fs.unlinkSync(filePath);
     return { success: true };
   } catch (err: any) {
@@ -226,7 +244,12 @@ ipcMain.handle("add-recent-project", async (_event, entry: RecentEntry) => {
 });
 
 app.whenReady().then(() => {
+  const isMac = process.platform === "darwin";
+
   const menuTemplate: Electron.MenuItemConstructorOptions[] = [
+    // macOS app menu
+    ...(isMac ? [{ role: "appMenu" as const }] : []),
+    // Custom file menu
     {
       label: "文件",
       submenu: [
@@ -246,6 +269,10 @@ app.whenReady().then(() => {
         },
       ],
     },
+    // Standard menus
+    { role: "editMenu" },
+    { role: "viewMenu" },
+    { role: "windowMenu" },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate));
   createWindow();
