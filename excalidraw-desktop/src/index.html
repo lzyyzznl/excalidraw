@@ -9,9 +9,9 @@
     <meta name="theme-color" content="#000000" />
     <title>Excalidraw Desktop</title>
     <script>
-      // Set asset path for font loading - use CDN fallback
-      // In production, this can be overridden to local path via preload
-      window.EXCALIDRAW_ASSET_PATH = "https://esm.sh/@excalidraw/excalidraw/dist/prod/";
+      // Set asset path for font loading — defaults to current origin
+      // (Vite dev server serves font files locally; production overrides via preload)
+      window.EXCALIDRAW_ASSET_PATH = window.origin;
     </script>
     <script>
       // Set window name so library browse can reuse this tab
