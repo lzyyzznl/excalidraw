@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog } from "electron";
+import { app, BrowserWindow, ipcMain, dialog, Menu } from "electron";
 import { join } from "path";
 import * as fs from "fs";
 
@@ -10,11 +10,14 @@ function getRecentProjectsPath(): string {
   return join(app.getPath("userData"), RECENT_PROJECTS_FILE);
 }
 
-function readRecentProjects(): Array<{
-  directory: string;
-  lastFile: string | null;
+interface RecentEntry {
+  type: "folder" | "file";
+  path: string;
+  displayName: string;
   lastOpened: number;
-}> {
+}
+
+function readRecentProjects(): RecentEntry[] {
   try {
     const filePath = getRecentProjectsPath();
     if (!fs.existsSync(filePath)) return [];
@@ -24,13 +27,7 @@ function readRecentProjects(): Array<{
   }
 }
 
-function writeRecentProjects(
-  projects: Array<{
-    directory: string;
-    lastFile: string | null;
-    lastOpened: number;
-  }>,
-) {
+function writeRecentProjects(projects: RecentEntry[]) {
   fs.writeFileSync(getRecentProjectsPath(), JSON.stringify(projects, null, 2));
 }
 
@@ -82,6 +79,38 @@ ipcMain.handle("select-directory", async () => {
     properties: ["openDirectory"],
   });
   return result.canceled ? null : result.filePaths[0];
+});
+
+ipcMain.handle("select-file", async () => {
+  if (!mainWindow) return null;
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ["openFile"],
+    filters: [{ name: "Excalidraw", extensions: ["excalidraw"] }],
+  });
+  return result.canceled ? null : result.filePaths[0];
+});
+
+ipcMain.handle("rename-file", async (_event, oldPath: string, newName: string) => {
+  try {
+    const dir = join(oldPath, "..");
+    const newPath = join(dir, newName);
+    if (fs.existsSync(newPath)) {
+      return { error: "文件名已存在" };
+    }
+    fs.renameSync(oldPath, newPath);
+    return { newPath };
+  } catch (err: any) {
+    return { error: err.message };
+  }
+});
+
+ipcMain.handle("delete-file", async (_event, filePath: string) => {
+  try {
+    fs.unlinkSync(filePath);
+    return { success: true };
+  } catch (err: any) {
+    return { error: err.message };
+  }
 });
 
 ipcMain.handle("list-files", async (_event, dir: string) => {
@@ -189,16 +218,36 @@ ipcMain.handle("get-recent-projects", async () => {
   return readRecentProjects();
 });
 
-ipcMain.handle("add-recent-project", async (_event, project) => {
+ipcMain.handle("add-recent-project", async (_event, entry: RecentEntry) => {
   const projects = readRecentProjects();
-  // Remove duplicate directory entry
-  const filtered = projects.filter((p) => p.directory !== project.directory);
-  filtered.unshift(project);
-  // Keep only last 20
+  const filtered = projects.filter((p) => p.path !== entry.path);
+  filtered.unshift(entry);
   writeRecentProjects(filtered.slice(0, 20));
 });
 
 app.whenReady().then(() => {
+  const menuTemplate: Electron.MenuItemConstructorOptions[] = [
+    {
+      label: "文件",
+      submenu: [
+        {
+          label: "打开文件夹",
+          accelerator: "CmdOrCtrl+O",
+          click: () => {
+            mainWindow?.webContents.send("menu-action", "select-directory");
+          },
+        },
+        {
+          label: "打开文件",
+          accelerator: "CmdOrCtrl+Shift+O",
+          click: () => {
+            mainWindow?.webContents.send("menu-action", "select-file");
+          },
+        },
+      ],
+    },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate));
   createWindow();
 
   app.on("activate", () => {
