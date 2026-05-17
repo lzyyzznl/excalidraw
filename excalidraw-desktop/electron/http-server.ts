@@ -3,6 +3,7 @@ import * as http from "http";
 import * as fs from "fs";
 import * as path from "path";
 import { parse as parseUrl } from "url";
+import { dialog } from "electron";
 
 const PORT = 19530;
 const HOST = "127.0.0.1";
@@ -168,6 +169,7 @@ async function handleApiRequest(
       const body = await readBody();
       if (!body.oldPath || !body.newName) return sendError(400, "Missing 'oldPath' or 'newName'");
       if (!isPathSafe(body.oldPath)) return sendError(400, "Invalid path");
+      if (/[/\\]/.test(body.newName)) return sendError(400, "文件名不能包含路径分隔符");
       const dir = path.dirname(body.oldPath);
       const newPath = path.join(dir, body.newName);
       if (fs.existsSync(newPath)) return sendError(409, "文件名已存在");
@@ -228,15 +230,74 @@ async function handleApiRequest(
     return;
   }
 
-  // GET /api/files/select — not available in WebUI
-  if (pathname === "/api/files/select") {
-    sendError(400, "WebUI does not support file selection. Please use the desktop application.");
+  // GET /api/directory/pick — open native OS picker
+  // Query: mode=file|dir|both (default: both)
+  if (pathname === "/api/directory/pick" && req.method === "GET") {
+    const mode = (query.mode as string) || "both";
+    try {
+      const properties: Array<"openFile" | "openDirectory"> = [];
+      if (mode === "file") properties.push("openFile");
+      else if (mode === "dir") properties.push("openDirectory");
+      else properties.push("openFile", "openDirectory");
+
+      const options: Electron.OpenDialogOptions = { properties };
+      if (mode !== "dir") {
+        options.filters = [{ name: "Excalidraw", extensions: ["excalidraw"] }];
+      }
+
+      const result = await dialog.showOpenDialog(options);
+      if (result.canceled || result.filePaths.length === 0) {
+        sendJson(200, { canceled: true });
+      } else {
+        const selectedPath = path.resolve(result.filePaths[0]);
+        const stats = fs.statSync(selectedPath);
+        sendJson(200, {
+          canceled: false,
+          path: selectedPath,
+          isDirectory: stats.isDirectory(),
+          isFile: stats.isFile(),
+        });
+      }
+    } catch (err: any) {
+      sendError(500, err.message);
+    }
     return;
   }
 
-  // POST /api/directory/select — not available in WebUI
-  if (pathname === "/api/directory/select") {
-    sendError(400, "WebUI does not support directory selection. Please use the desktop application.");
+  // GET /api/directory/browse?path=xxx
+  if (pathname === "/api/directory/browse" && req.method === "GET") {
+    const dirPath = query.path as string;
+    if (!dirPath || !isPathSafe(dirPath)) return sendError(400, "Invalid or missing 'path' parameter");
+    try {
+      const stat = fs.statSync(dirPath);
+      if (!stat.isDirectory()) return sendError(400, "Path is not a directory");
+
+      const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+      const subdirs: { name: string; path: string }[] = [];
+      const files: SimpleFileInfo[] = [];
+
+      for (const entry of entries) {
+        const fullPath = path.join(dirPath, entry.name);
+        if (entry.isDirectory()) {
+          subdirs.push({ name: entry.name, path: fullPath });
+        } else if (entry.isFile() && entry.name.toLowerCase().endsWith(".excalidraw")) {
+          const stat = fs.statSync(fullPath);
+          files.push({ name: entry.name, path: fullPath, modifiedAt: stat.mtimeMs });
+        }
+      }
+
+      subdirs.sort((a, b) => a.name.localeCompare(b.name));
+      files.sort((a, b) => b.modifiedAt - a.modifiedAt);
+
+      const parentDir = dirPath === "/" ? null : path.resolve(dirPath, "..");
+
+      sendJson(200, {
+        currentDir: dirPath,
+        parentDir: parentDir !== dirPath ? parentDir : null,
+        subdirs,
+        files,
+      });
+    } catch (err: any) { sendError(500, err.message); }
     return;
   }
 

@@ -112,12 +112,20 @@ function createTray() {
 
 // ── Window ──────────────────────────────────────────────────────────────────
 
+function getWindowIconPath(): string {
+  if (app.isPackaged) {
+    return join(process.resourcesPath, "assets", "icon.png");
+  }
+  return join(__dirname, "../../build-assets/icon.png");
+}
+
 export function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
     minWidth: 800,
     minHeight: 600,
+    icon: getWindowIconPath(),
     webPreferences: {
       preload: join(__dirname, "../preload/index.js"),
       contextIsolation: true,
@@ -316,9 +324,62 @@ ipcMain.handle("add-recent-project", async (_event, entry: RecentEntry) => {
   writeRecentProjects(filtered.slice(0, 20));
 });
 
+// ── Desktop Shortcut ──────────────────────────────────────────────────────
+
+function ensureDesktopShortcut() {
+  if (process.platform !== "linux") return;
+
+  // Only run when packaged (RPM installed)
+  if (!app.isPackaged) return;
+
+  const sentinelFile = join(app.getPath("userData"), ".desktop-shortcut-created");
+
+  // Already created
+  if (fs.existsSync(sentinelFile)) return;
+
+  const desktopDir = join(app.getPath("home"), "Desktop");
+  const desktopFile = join(desktopDir, "excalidraw-desktop.desktop");
+
+  // Desktop directory doesn't exist
+  if (!fs.existsSync(desktopDir)) return;
+
+  // Copy .desktop file from system location
+  const srcDesktop = "/usr/share/applications/excalidraw-desktop.desktop";
+  if (!fs.existsSync(srcDesktop)) return;
+
+  try {
+    const content = fs.readFileSync(srcDesktop, "utf-8");
+    fs.writeFileSync(desktopFile, content, "utf-8");
+    fs.chmodSync(desktopFile, 0o755);
+    fs.writeFileSync(sentinelFile, new Date().toISOString(), "utf-8");
+    console.log(`[Desktop] Shortcut created at ${desktopFile}`);
+  } catch (err) {
+    console.error("[Desktop] Failed to create shortcut:", err);
+  }
+}
+
 // ── App Lifecycle ───────────────────────────────────────────────────────────
 
+// Single instance lock — prevents multiple app instances (RPM update safety)
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+}
+
+// Set explicit WM_CLASS for Linux taskbar icon matching
+if (process.platform === "linux") {
+  app.commandLine.appendSwitch("class", "excalidraw-desktop");
+}
+
 app.whenReady().then(() => {
+  ensureDesktopShortcut();
   createWindow();
   createTray();
 

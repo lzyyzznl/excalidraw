@@ -14,7 +14,9 @@ interface RecentEntry {
   lastOpened: number;
 }
 
-const isDesktop = typeof window.electronAPI !== "undefined";
+const isDesktop =
+  typeof window.electronAPI !== "undefined" &&
+  window.electronAPI!.platform !== "web";
 
 function formatTime(ms: number): string {
   const d = new Date(ms);
@@ -47,16 +49,22 @@ export default function App() {
 
   // Load recent projects on mount
   useEffect(() => {
-    const loadRecent = (raw: RecentEntry[]) =>
-      setRecentProjects(raw.filter((e) => e.path));
-    if (isDesktop) {
-      window.electronAPI!.getRecentProjects().then(loadRecent);
-    } else {
-      try {
-        const saved = localStorage.getItem("excalidraw-desktop-recent");
-        if (saved) loadRecent(JSON.parse(saved));
-      } catch {}
-    }
+    const loadRecent = async () => {
+      if (window.electronAPI) {
+        const raw = await window.electronAPI.getRecentProjects();
+        setRecentProjects(raw.filter((e: RecentEntry) => e.path));
+      } else {
+        // WebUI mode: load via HTTP API
+        try {
+          const res = await fetch("/api/projects/recent");
+          const data = await res.json();
+          if (Array.isArray(data)) {
+            setRecentProjects(data.filter((e: RecentEntry) => e.path));
+          }
+        } catch { /* ignore */ }
+      }
+    };
+    loadRecent();
   }, []);
 
   // Open directory
@@ -150,11 +158,11 @@ export default function App() {
 
     setRecentProjects((prev) => {
       const filtered = prev.filter((p) => p.path !== dir && p.path !== filePath);
-      return [
+      return ([
         { type: "folder", path: dir, displayName: folderName, lastOpened: now },
         { type: "file", path: filePath, displayName, lastOpened: now },
         ...filtered,
-      ].slice(0, 20);
+      ] as RecentEntry[]).slice(0, 20);
     });
   }, []);
 
@@ -272,7 +280,21 @@ export default function App() {
       setRenamingFile(null);
       return;
     }
+    const oldName = renamingFile.split("/").pop() || "";
     const newName = renameValue.trim() + ".excalidraw";
+
+    // 同名则跳过（用户按 Enter 不改名）
+    if (newName === oldName) {
+      setRenamingFile(null);
+      return;
+    }
+
+    // 先 flush 编辑器未保存内容到当前文件
+    const flush = (window as any).__excalidrawFlushSave;
+    if (typeof flush === "function") {
+      flush();
+    }
+
     const result = await window.electronAPI!.renameFile(renamingFile, newName);
     if (result.error) {
       setError(result.error);
@@ -372,6 +394,114 @@ export default function App() {
     document.addEventListener("mouseup", handleMouseUp);
   }, []);
 
+  // ── WebUI helpers ────────────────────────────────────────────────────
+  const saveRecentWebUI = useCallback(async (entry: RecentEntry) => {
+    try {
+      await fetch("/api/projects/recent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(entry),
+      });
+    } catch { /* ignore */ }
+  }, []);
+
+  const openDirectoryWebUI = useCallback(async (dir: string) => {
+    if (!dir.trim()) return;
+
+    if (unwatchRef.current) {
+      unwatchRef.current();
+      unwatchRef.current = null;
+    }
+
+    setDirectory(dir);
+    setActiveFile(null);
+    setError(null);
+
+    try {
+      const res = await fetch(`/api/files?dir=${encodeURIComponent(dir)}`);
+      const result = await res.json();
+      if (result.error) {
+        setError(result.error);
+        setFiles([]);
+        return;
+      }
+      setFiles(result.files || []);
+    } catch (err: any) {
+      setError(err.message);
+      setFiles([]);
+    }
+
+    if (window.electronAPI) {
+      const unwatch = window.electronAPI.watchDirectory(dir, (updatedFiles) => {
+        setFiles(updatedFiles);
+      });
+      unwatchRef.current = unwatch;
+    }
+
+    const folderName = dir.split("/").pop() || dir;
+    const entry: RecentEntry = {
+      type: "folder" as const,
+      path: dir,
+      displayName: folderName,
+      lastOpened: Date.now(),
+    };
+    window.electronAPI?.addRecentProject(entry);
+    saveRecentWebUI(entry);
+
+    setRecentProjects((prev) => {
+      const filtered = prev.filter((p) => p.path !== dir);
+      return [entry, ...filtered].slice(0, 20);
+    });
+  }, [saveRecentWebUI]);
+
+  const handleWebUIOpenDirectory = useCallback(async () => {
+    try {
+      const res = await fetch("/api/directory/pick?mode=dir");
+      const result = await res.json();
+      if (!result.canceled && result.path && result.isDirectory) {
+        await openDirectoryWebUI(result.path);
+      }
+    } catch (err: any) {
+      setError(err.message);
+    }
+  }, [openDirectoryWebUI]);
+
+  const handleWebUIOpenFile = useCallback(async () => {
+    try {
+      const res = await fetch("/api/directory/pick?mode=file");
+      const result = await res.json();
+      if (!result.canceled && result.path && result.isFile) {
+        const dir = result.path.split("/").slice(0, -1).join("/");
+        await openDirectoryWebUI(dir);
+        setActiveFile(result.path);
+      }
+    } catch (err: any) {
+      setError(err.message);
+    }
+  }, [openDirectoryWebUI]);
+
+  const handleWebUIRecent = useCallback(
+    async (entry: RecentEntry) => {
+      if (entry.type === "folder") {
+        await openDirectoryWebUI(entry.path);
+      } else {
+        const dir = entry.path.split("/").slice(0, -1).join("/");
+        await openDirectoryWebUI(dir);
+        setActiveFile(entry.path);
+      }
+
+      const updated: RecentEntry = { ...entry, lastOpened: Date.now() };
+      window.electronAPI?.addRecentProject(updated);
+      saveRecentWebUI(updated);
+
+      setRecentProjects((prev) => {
+        const filtered = prev.filter((p) => p.path !== entry.path);
+        return [updated, ...filtered].slice(0, 20);
+      });
+    },
+    [openDirectoryWebUI, saveRecentWebUI],
+  );
+
   // ── Render ────────────────────────────────────────────────────────────
 
   // No directory open — show welcome screen
@@ -381,42 +511,38 @@ export default function App() {
         <div className="welcome-screen" style={{ flex: 1 }}>
           <h1>Excalidraw Desktop</h1>
           <p>打开一个包含 .excalidraw 文件的文件夹，或直接打开文件开始编辑。</p>
-          {isDesktop ? (
-            <>
-              <div className="welcome-buttons">
-                <button className="welcome-btn" onClick={openDirectory}>
-                  打开文件夹
-                </button>
-                <button className="welcome-btn" onClick={openFile}>
-                  打开文件
-                </button>
-              </div>
-              {recentProjects.length > 0 && (
-                <div className="recent-projects">
-                  <h3>最近打开</h3>
-                  {recentProjects.map((entry) => (
-                    <div
-                      className="recent-item"
-                      key={entry.path}
-                      onClick={() => openRecent(entry)}
-                    >
-                      <span className="recent-icon">
-                        {entry.type === "folder" ? "\u{1F4C1}" : "\u{1F4DD}"}
-                      </span>
-                      <span className="recent-dir">{entry.displayName}</span>
-                      <span className="recent-type-badge">
-                        {entry.type === "folder" ? "文件夹" : "文件"}
-                      </span>
-                      <span className="recent-time">
-                        {formatTime(entry.lastOpened)}
-                      </span>
-                    </div>
-                  ))}
+          <div className="welcome-buttons">
+            <button className="welcome-btn" onClick={isDesktop ? openDirectory : handleWebUIOpenDirectory}>
+              打开文件夹
+            </button>
+            <button className="welcome-btn" onClick={isDesktop ? openFile : handleWebUIOpenFile}>
+              打开文件
+            </button>
+          </div>
+          {recentProjects.length > 0 && (
+            <div className="recent-projects">
+              <h3>最近打开</h3>
+              {recentProjects.map((entry) => (
+                <div
+                  className="recent-item"
+                  key={entry.path}
+                  onClick={() =>
+                    isDesktop ? openRecent(entry) : handleWebUIRecent(entry)
+                  }
+                >
+                  <span className="recent-icon">
+                    {entry.type === "folder" ? "\u{1F4C1}" : "\u{1F4DD}"}
+                  </span>
+                  <span className="recent-dir">{entry.displayName}</span>
+                  <span className="recent-type-badge">
+                    {entry.type === "folder" ? "文件夹" : "文件"}
+                  </span>
+                  <span className="recent-time">
+                    {formatTime(entry.lastOpened)}
+                  </span>
                 </div>
-              )}
-            </>
-          ) : (
-            <p>WebUI 模式：请使用 Electron 桌面版打开文件夹管理功能。</p>
+              ))}
+            </div>
           )}
         </div>
         {error && <div className="error-toast">{error}</div>}
@@ -471,6 +597,7 @@ export default function App() {
                     className="file-rename-input"
                     value={renameValue}
                     onChange={(e) => setRenameValue(e.target.value)}
+                    onBlur={() => confirmRename()}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") confirmRename();
                       if (e.key === "Escape") setRenamingFile(null);

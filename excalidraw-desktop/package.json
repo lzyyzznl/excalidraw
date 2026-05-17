@@ -10,8 +10,8 @@
     "preview": "electron-vite preview",
     "start": "electron .",
     "typecheck": "tsc --noEmit",
-    "build:rpm": "yarn build && electron-builder --linux rpm",
-    "build:linux": "yarn build && electron-builder --linux"
+    "build:rpm": "yarn build && electron-builder --linux rpm && bash scripts/inject-rpm-scripts.sh",
+    "build:linux": "yarn build && electron-builder --linux && bash scripts/inject-rpm-scripts.sh"
   },
   "build": {
     "appId": "com.excalidraw.desktop",
