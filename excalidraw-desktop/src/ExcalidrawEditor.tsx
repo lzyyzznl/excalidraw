@@ -278,6 +278,7 @@ export default function ExcalidrawEditor({
   return (
     <div className="editor-area">
       <Excalidraw
+        langCode="zh-CN"
         initialData={{
           elements: initialData.elements,
           appState: initialData.appState || undefined,
