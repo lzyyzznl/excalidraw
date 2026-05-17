@@ -11,7 +11,9 @@
     "start": "electron .",
     "typecheck": "tsc --noEmit",
     "build:rpm": "yarn build && electron-builder --linux rpm && bash scripts/inject-rpm-scripts.sh",
-    "build:linux": "yarn build && electron-builder --linux && bash scripts/inject-rpm-scripts.sh"
+    "build:linux": "yarn build && electron-builder --linux && bash scripts/inject-rpm-scripts.sh",
+    "build:win": "yarn build && electron-builder --win",
+    "build:all": "yarn build && electron-builder --win --linux"
   },
   "build": {
     "appId": "com.excalidraw.desktop",
@@ -50,6 +52,19 @@
         "libappindicator-gtk3",
         "libXScrnSaver"
       ]
+    },
+    "win": {
+      "target": ["nsis"],
+      "icon": "build-assets/icon.png",
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Excalidraw Desktop"
     }
   },
   "dependencies": {
