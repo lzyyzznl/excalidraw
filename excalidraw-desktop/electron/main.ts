@@ -383,10 +383,8 @@ app.whenReady().then(() => {
   createWindow();
   createTray();
 
-  // Custom application menu
-  const isMac = process.platform === "darwin";
+  // Custom application menu – only keep file open operations
   const menuTemplate: Electron.MenuItemConstructorOptions[] = [
-    ...(isMac ? [{ role: "appMenu" as const }] : []),
     {
       label: "文件",
       submenu: [
@@ -406,9 +404,6 @@ app.whenReady().then(() => {
         },
       ],
     },
-    { role: "editMenu" },
-    { role: "viewMenu" },
-    { role: "windowMenu" },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate));
 
